@@ -1544,7 +1544,7 @@ class Building:
       assert os.path.exists(output_filename), 'emar could not create output file: ' + output_filename
 
   @staticmethod
-  def emscripten(filename, append_ext=True, extra_args=[]):
+  def emscripten(filename, append_ext=True, extra_args=[], ra_file=None):
     # Allow usage of emscripten.py without warning
     os.environ['EMSCRIPTEN_SUPPRESS_USAGE_WARNING'] = '1'
 
@@ -1553,6 +1553,8 @@ class Building:
       Settings.RELOOPER = Cache.get_path('relooper.js')
     settings = Settings.serialize()
     args = settings + extra_args
+    if ra_file:
+      args += ['-r', ra_file]
     if WINDOWS:
       rsp_file = response_file.create_response_file(args, TEMP_DIR)
       args = ['@' + rsp_file]
