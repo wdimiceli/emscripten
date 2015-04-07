@@ -569,7 +569,8 @@ Module['ALLOC_NONE'] = ALLOC_NONE;
 //         is initial data - if @slab is a number, then this does not matter at all and is
 //         ignored.
 // @allocator: How to allocate memory, see ALLOC_*
-function allocate(slab, types, allocator, ptr) {
+function allocate(slab, types, allocator, ptr, packed) {
+  packed = !!packed;
   var zeroinit, size;
   if (typeof slab === 'number') {
     zeroinit = true;
@@ -610,6 +611,13 @@ function allocate(slab, types, allocator, ptr) {
       HEAPU8.set(slab, ret);
     } else {
       HEAPU8.set(new Uint8Array(slab), ret);
+    }
+    return ret;
+  } else if (packed && singleType === 'i32') {
+    if (slab.subarray || slab.slice) {
+      HEAPU32.set(slab, ret>>2);
+    } else {
+      HEAPU32.set(new Uint32Array(slab), ret>>2);
     }
     return ret;
   }

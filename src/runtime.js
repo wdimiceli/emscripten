@@ -13,7 +13,11 @@ var RuntimeGenerator = {
     if (init) {
       ret += sep + '_memset(' + type + 'TOP, 0, ' + size + ')';
     }
-    ret += sep + type + 'TOP = (' + type + 'TOP + ' + size + ')|0';
+    if (type === 'STACK') {
+      ret += sep + type + 'TOP = (' + type + 'TOP - ' + size + ')|0';
+    } else {
+      ret += sep + type + 'TOP = (' + type + 'TOP + ' + size + ')|0';
+    }
     if ({{{ STACK_ALIGN }}} > 1 && !ignoreAlign) {
       ret += sep + RuntimeGenerator.alignMemory(type + 'TOP', {{{ STACK_ALIGN }}});
     }
@@ -25,7 +29,7 @@ var RuntimeGenerator = {
     sep = sep || ';';
     var ret = RuntimeGenerator.alloc(size, 'STACK', false, sep, USE_TYPED_ARRAYS != 2 || (isNumber(size) && parseInt(size) % {{{ STACK_ALIGN }}} == 0));
     if (ASSERTIONS) {
-      ret += sep + '(assert(' + asmCoercion('(STACKTOP|0) < (STACK_MAX|0)', 'i32') + ')|0)';
+      ret += sep + '(assert(' + asmCoercion('(STACKTOP|0) >= (STACK_BASE|0)', 'i32') + ')|0)';
     }
     return ret;
   },
@@ -33,7 +37,7 @@ var RuntimeGenerator = {
   stackEnter: function(initial, force) {
     if (initial === 0 && SKIP_STACK_IN_SMALL && !force) return '';
     var ret = 'var sp=' + (ASM_JS ? '0;sp=' : '') + 'STACKTOP';
-    if (initial > 0) ret += ';STACKTOP=(STACKTOP+' + initial + ')|0';
+    if (initial > 0) ret += ';STACKTOP=(STACKTOP-' + initial + ')|0';
     if (USE_TYPED_ARRAYS == 2) {
       assert(initial % Runtime.STACK_ALIGN == 0);
       if (ASSERTIONS && Runtime.STACK_ALIGN == 4) {
@@ -41,7 +45,7 @@ var RuntimeGenerator = {
       }
     }
     if (ASSERTIONS) {
-      ret += '; (assert(' + asmCoercion('(STACKTOP|0) < (STACK_MAX|0)', 'i32') + ')|0)';
+      ret += '; (assert(' + asmCoercion('(STACKTOP|0) >= (STACK_BASE|0)', 'i32') + ')|0)';
     }
     return ret;
   },
@@ -50,7 +54,7 @@ var RuntimeGenerator = {
     if (initial === 0 && SKIP_STACK_IN_SMALL && !force) return '';
     var ret = '';
     if (SAFE_HEAP && !ASM_JS) {
-      ret += 'var i = sp; while ((i|0) < (STACKTOP|0)) { SAFE_HEAP_CLEAR(i|0); i = (i+1)|0 }';
+      ret += 'var i = sp; while ((i|0) > (STACKTOP|0)) { SAFE_HEAP_CLEAR(i|0); i = (i-1)|0 }';
     }
     return ret += 'STACKTOP=sp';
   },
@@ -77,7 +81,11 @@ var RuntimeGenerator = {
     if (isNumber(target) && isNumber(quantum)) {
       return Math.ceil(target/quantum)*quantum;
     } else if (isNumber(quantum) && isPowerOfTwo(quantum)) {
-      return '(((' +target + ')+' + (quantum-1) + ')&' + -quantum + ')';
+      if (target === 'STACKTOP') {
+        return '(((' +target + ')' + ')&' + -quantum + ')';
+      } else {
+        return '(((' +target + ')+' + (quantum-1) + ')&' + -quantum + ')';
+      }
     }
     return 'Math.ceil((' + target + ')/' + quantum + ')*' + quantum;
   },
