@@ -68,7 +68,7 @@ def process_funcs((i, funcs_file, meta, settings_file, compiler, forwarded_file,
   return out
 
 def emscript(infile, settings, outfile, libraries=[], compiler_engine=None,
-             jcache=None, temp_files=None, DEBUG=None, DEBUG_CACHE=None):
+             jcache=None, temp_files=None, DEBUG=None, DEBUG_CACHE=None, ra_file=None):
   """Runs the emscripten LLVM-to-JS compiler. We parallelize as much as possible
 
   Args:
@@ -747,7 +747,7 @@ Runtime.getTempRet0 = asm['getTempRet0'];
 #        if the experiment fails)
 
 def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
-             jcache=None, temp_files=None, DEBUG=None, DEBUG_CACHE=None):
+             jcache=None, temp_files=None, DEBUG=None, DEBUG_CACHE=None, ra_file=None):
   """Runs the emscripten LLVM-to-JS compiler.
 
   Args:
@@ -823,6 +823,25 @@ def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
         curr = v.count(',')+1
         if curr < max_size:
           metadata['tables'][k] = v.replace(']', (',0'*(max_size - curr)) + ']')
+
+    if ra_file:
+      rf = open(ra_file, 'r')
+      raJson = json.loads(rf.read())
+      rf.close()
+      voidTable = metadata['tables'].setdefault('v', '[]')
+      raFunctionPointerBaseAddr = voidTable.count(',')
+      metadata['tables']['v'] = voidTable.replace(']', ',' + raJson['functionPointers'] + ']')
+      metadata['implementedFunctions'].extend(raJson['implementedFunctions'].split(','))
+      metadata['declares'].extend(raJson['declares'].split(','))
+      addr = mem_init.count(',')+1
+      for name, bufferSize, data in raJson['staticData']:
+        addr += bufferSize
+        if data:
+          mem_init = mem_init + '\nvar %s = allocate(%s, "i32", ALLOC_STATIC, undefined, true);' % (name, json.dumps(data))
+          #mem_init = mem_init + '\nvar %s = %d;' % (name, )
+        else:
+          mem_init = mem_init + '\nvar %s = allocate(%d, "i8", ALLOC_STATIC, undefined, true);' % (name, bufferSize)
+    open('emscripten_debug.txt', 'w').write(str(metadata))
 
     # function table masks
 
@@ -955,6 +974,12 @@ def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
            requested != '_malloc': # special-case malloc, EXPORTED by default for internal use, but we bake in a trivial allocator and warn at runtime if used in ASSERTIONS
           logging.warning('function requested to be exported, but not implemented: "%s"', requested)
 
+    def isInImplementedFunctions(id):
+      for i in implemented_functions:
+        if i == id or (i.endswith('*') and id.startswith(i[:-1])):
+          return True
+      return False
+
     # Add named globals
     named_globals = '\n'.join(['var %s = %s;' % (k, v) for k, v in metadata['namedGlobals'].iteritems()])
     pre = pre.replace('// === Body ===', '// === Body ===\n' + named_globals + '\n')
@@ -985,6 +1010,8 @@ def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
       return ''
     if not settings['BOOTSTRAPPING_STRUCT_INFO']:
       funcs_js[1] = re.sub(r'/\* PRE_ASM \*/(.*)\n', lambda m: move_preasm(m), funcs_js[1])
+    if ra_file:
+      funcs_js += raJson['code']
 
     class Counter:
       i = 0
@@ -1065,7 +1092,7 @@ def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
             specific_bad, specific_bad_func = make_bad(j)
             Counter.pre.append(specific_bad_func)
             return specific_bad if not newline else (specific_bad + '\n')
-        if item not in implemented_functions:
+        if not isInImplementedFunctions(item):
           # this is imported into asm, we must wrap it
           call_ident = item
           if call_ident in metadata['redirects']: call_ident = metadata['redirects'][call_ident]
@@ -1088,6 +1115,8 @@ def emscript_fast(infile, settings, outfile, libraries=[], compiler_engine=None,
     Counter.pre = []
 
     function_tables_defs = '\n'.join([info[0] for info in infos]) + '\n\n// EMSCRIPTEN_END_FUNCS\n' + '\n'.join([info[1] for info in infos])
+    if ra_file:
+      function_tables_defs += '\nvar %s = %d;' % (raJson['functionPointerBase'], raFunctionPointerBaseAddr)
 
     asm_setup = ''
     maths = ['Math.' + func for func in ['floor', 'abs', 'sqrt', 'pow', 'cos', 'sin', 'tan', 'acos', 'asin', 'atan', 'atan2', 'exp', 'log', 'ceil', 'imul', 'min', 'clz32']]
@@ -1392,12 +1421,10 @@ function _declare_heap_length() {
 // EMSCRIPTEN_START_FUNCS
 function stackAlloc(size) {
   size = size|0;
-  var ret = 0;
-  ret = STACKTOP;
-  STACKTOP = (STACKTOP + size)|0;
-''' + ('STACKTOP = (STACKTOP + 3)&-4;' if settings['TARGET_X86'] else 'STACKTOP = (STACKTOP + 15)&-16;\n') +
-      ('if ((STACKTOP|0) >= (STACK_MAX|0)) abort();\n' if settings['ASSERTIONS'] else '') + '''
-  return ret|0;
+  STACKTOP = (STACKTOP - size)|0;
+''' + ('STACKTOP = (STACKTOP)&-4;' if settings['TARGET_X86'] else 'STACKTOP = (STACKTOP)&-16;\n') +
+      ('if ((STACKTOP|0) < (STACK_BASE|0)) abort();\n' if settings['ASSERTIONS'] else '') + '''
+  return STACKTOP|0;
 }
 function stackSave() {
   return STACKTOP|0;
@@ -1571,7 +1598,7 @@ def main(args, compiler_engine, cache, jcache, relooper, temp_files, DEBUG, DEBU
     if DEBUG: logging.debug('  emscript: bootstrapping struct info complete')
 
   emscript(args.infile, settings, args.outfile, libraries, compiler_engine=compiler_engine,
-           jcache=jcache, temp_files=temp_files, DEBUG=DEBUG, DEBUG_CACHE=DEBUG_CACHE)
+           jcache=jcache, temp_files=temp_files, DEBUG=DEBUG, DEBUG_CACHE=DEBUG_CACHE, ra_file=args.remotealbatross)
 
 def _main(environ):
   response_file = True
@@ -1587,7 +1614,7 @@ def _main(environ):
         break
 
   parser = optparse.OptionParser(
-    usage='usage: %prog [-h] [-H HEADERS] [-o OUTFILE] [-c COMPILER_ENGINE] [-s FOO=BAR]* infile',
+    usage='usage: %prog [-h] [-H HEADERS] [-o OUTFILE] [-c COMPILER_ENGINE] [-r REMOTE_ALBATROSS] [-s FOO=BAR]* infile',
     description=('You should normally never use this! Use emcc instead. '
                  'This is a wrapper around the JS compiler, converting .ll to .js.'),
     epilog='')
@@ -1605,6 +1632,9 @@ def _main(environ):
   parser.add_option('-c', '--compiler',
                     default=None,
                     help='Which JS engine to use to run the compiler; defaults to the one in ~/.emscripten.')
+  parser.add_option('-r', '--remotealbatross',
+                    default=None,
+                    help='Specify an additional remote albatross file to include in the module.')
   parser.add_option('--relooper',
                     default=None,
                     help='Which relooper file to use if RELOOP is enabled.')

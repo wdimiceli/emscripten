@@ -64,6 +64,7 @@ DYNAMICLIB_ENDINGS = ('.dylib', '.so') # Windows .dll suffix is not included in 
 STATICLIB_ENDINGS = ('.a',)
 ASSEMBLY_ENDINGS = ('.ll',)
 HEADER_ENDINGS = ('.h', '.hxx', '.hpp', '.hh', '.H', '.HXX', '.HPP', '.HH')
+REMOTEALBATROSS_ENDINGS = ('.ra',)
 SUPPORTED_LINKER_FLAGS = ('--start-group', '-(', '--end-group', '-)')
 
 LIB_PREFIXES = ('', 'lib')
@@ -474,6 +475,7 @@ try:
     return level
 
   should_exit = False
+  ra_file = None
 
   for i in range(len(newargs)):
     newargs[i] = newargs[i].strip() # On Windows Vista (and possibly others), excessive spaces in the command line leak into the items in this array, so trim e.g. 'foo.cpp ' -> 'foo.cpp'
@@ -688,6 +690,10 @@ try:
       default_object_extension = newargs[i+1]
       if not default_object_extension.startswith('.'):
         default_object_extension = '.' + default_object_extension
+      newargs[i+1] = ''
+    elif newargs[i] == '--remotealbatross':
+      newargs[i] = ''
+      ra_file = newargs[i+1]
       newargs[i+1] = ''
 
   if should_exit:
@@ -1333,6 +1339,7 @@ try:
   logging.debug('LLVM => JS')
   extra_args = [] if not js_libraries else ['--libraries', ','.join(map(os.path.abspath, js_libraries))]
   if jcache: extra_args.append('--jcache')
+  final = shared.Building.emscripten(final, append_ext=False, extra_args=extra_args, ra_file=ra_file)
   final = shared.Building.emscripten(final, append_ext=False, extra_args=extra_args)
   if DEBUG: save_intermediate('original')
 
